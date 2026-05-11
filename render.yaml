@@ -3,7 +3,9 @@ services:
     name: tt-printhub-orienteer
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: python -u app.py
     envVars:
       - key: PORT
-        value: 5000
+        value: 10000
+      - key: PYTHONUNBUFFERED
+        value: "1"
