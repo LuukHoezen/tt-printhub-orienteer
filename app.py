@@ -1,11 +1,9 @@
 import os
 import sys
 import tempfile
-sys.stdout.flush()
-os.environ['PYTHONUNBUFFERED'] = '1'
 import struct
 import math
-from flask import Flask, request, send_file, jsonify, Response
+from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
 
@@ -15,7 +13,7 @@ def parse_stl(data):
     num_triangles = struct.unpack_from('<I', data, 80)[0]
     expected_size = 84 + num_triangles * 50
     if len(data) != expected_size:
-        raise ValueError(f"Geen binary STL: verwacht {expected_size} bytes, kreeg {len(data)}")
+        raise ValueError(f"Geen binary STL: verwacht {expected_size}, kreeg {len(data)}")
     triangles = []
     offset = 84
     for _ in range(num_triangles):
@@ -94,17 +92,21 @@ def write_stl(triangles):
 
 @app.route('/orient', methods=['POST'])
 def orient():
-    print(f"Request ontvangen, content-type: {request.content_type}")
-    print(f"Files in request: {list(request.files.keys())}")
-    print(f"Form data: {list(request.form.keys())}")
+    # Debug: stuur info terug als header
+    debug_info = []
+    debug_info.append(f"content-type: {request.content_type}")
+    debug_info.append(f"files: {list(request.files.keys())}")
+    debug_info.append(f"content-length: {request.content_length}")
 
     if 'file' not in request.files:
-        print("FOUT: geen 'file' in request.files")
-        return jsonify({'error': 'Geen bestand ontvangen'}), 400
+        # Probeer raw body te lezen
+        raw = request.get_data()
+        debug_info.append(f"geen file, raw body grootte: {len(raw)}, eerste bytes: {raw[:20].hex()}")
+        return jsonify({'error': 'Geen bestand', 'debug': debug_info}), 400
 
     file = request.files['file']
     filename = file.filename or 'model.stl'
-    print(f"Bestandsnaam: {filename}")
+    debug_info.append(f"filename: {filename}")
 
     if not filename.lower().endswith('.stl'):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
@@ -113,22 +115,24 @@ def orient():
 
     try:
         data = file.read()
-        print(f"Bestandsgrootte: {len(data)} bytes, eerste byte: {data[0] if data else 'leeg'}")
+        debug_info.append(f"bestandsgrootte: {len(data)}")
         triangles = parse_stl(data)
-        print(f"Triangles: {len(triangles)}")
+        debug_info.append(f"triangles: {len(triangles)}")
         oriented = orient_stl(triangles)
         result = write_stl(oriented)
-        print(f"Resultaat: {len(result)} bytes")
+        debug_info.append(f"resultaat: {len(result)}")
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
         tmp.write(result)
         tmp.flush()
 
-        return send_file(tmp.name, as_attachment=True, download_name=filename, mimetype='application/octet-stream')
+        response = send_file(tmp.name, as_attachment=True, download_name=filename, mimetype='application/octet-stream')
+        response.headers['X-Debug'] = ' | '.join(debug_info)
+        return response
 
     except Exception as e:
-        print(f"FOUT in orient: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        debug_info.append(f"fout: {str(e)}")
+        return jsonify({'error': str(e), 'debug': debug_info}), 500
 
 @app.route('/health', methods=['GET'])
 def health():
