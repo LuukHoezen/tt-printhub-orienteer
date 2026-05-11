@@ -1,5 +1,8 @@
 import os
+import sys
 import tempfile
+sys.stdout.flush()
+os.environ['PYTHONUNBUFFERED'] = '1'
 import struct
 import math
 from flask import Flask, request, send_file, jsonify, Response
