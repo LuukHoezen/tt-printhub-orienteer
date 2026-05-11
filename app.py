@@ -153,9 +153,12 @@ def orient():
     
     try:
         data = file.read()
+        print(f"Ontvangen bestand: {filename}, grootte: {len(data)} bytes")
         triangles = parse_stl(data)
+        print(f"Aantal triangles: {len(triangles)}")
         oriented = orient_stl(triangles)
         result = write_stl(oriented)
+        print(f"Georiënteerd STL grootte: {len(result)} bytes")
         
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
         tmp.write(result)
@@ -164,6 +167,7 @@ def orient():
         return send_file(tmp.name, as_attachment=True, download_name=filename, mimetype='application/octet-stream')
     
     except Exception as e:
+        print(f"Fout: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
