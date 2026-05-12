@@ -72,10 +72,19 @@ def orient():
             show_progress=False
         )
 
-        # Haal rotatiematrix op (.Matrix met hoofdletter M)
-        # Haal rotatiematrix op uit results array
-        # results formaat: [[orientation, bottom_area, overhang, contour, unprintability, [euler_vec, euler_angle, matrix]], ...]
-        rotation_matrix = np.array(tweaker.results[0][5][2])
+        # Tweaker-3 geeft rotation_axis en rotation_angle terug
+        axis = np.array(tweaker.rotation_axis)
+        angle = tweaker.rotation_angle
+
+        # Bouw rotatiematrix via Rodrigues formule
+        axis = axis / np.linalg.norm(axis) if np.linalg.norm(axis) > 1e-10 else np.array([0, 0, 1])
+        c, s = np.cos(angle), np.sin(angle)
+        x, y, z = axis
+        rotation_matrix = np.array([
+            [c + x*x*(1-c),   x*y*(1-c) - z*s, x*z*(1-c) + y*s],
+            [y*x*(1-c) + z*s, c + y*y*(1-c),   y*z*(1-c) - x*s],
+            [z*x*(1-c) - y*s, z*y*(1-c) + x*s, c + z*z*(1-c)  ],
+        ])
 
         # Pas rotatie toe: mesh @ rotation_matrix (zoals Tweaker-3 zelf doet)
         mesh = np.array(content, dtype=np.float64).reshape(num_triangles, 3, 3)
