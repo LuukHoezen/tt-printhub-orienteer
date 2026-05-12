@@ -8,7 +8,7 @@ from tweaker3 import Tweaker
 app = Flask(__name__)
 
 def read_stl(filepath):
-    """Lees binary STL en geef vertices terug als platte lijst."""
+    """Lees binary STL, geef platte lijst van vertices terug."""
     with open(filepath, 'rb') as f:
         data = f.read()
     if len(data) < 84:
@@ -17,27 +17,23 @@ def read_stl(filepath):
     expected_size = 84 + num_triangles * 50
     if len(data) != expected_size:
         raise ValueError(f"Geen binary STL: verwacht {expected_size}, kreeg {len(data)}")
-    # Platte lijst van vertices: [v1, v2, v3, v1, v2, v3, ...]
     vertices = []
     offset = 84
     for _ in range(num_triangles):
-        v1 = list(struct.unpack_from('<fff', data, offset + 12))
-        v2 = list(struct.unpack_from('<fff', data, offset + 24))
-        v3 = list(struct.unpack_from('<fff', data, offset + 36))
-        vertices.append(v1)
-        vertices.append(v2)
-        vertices.append(v3)
+        for vi in range(3):
+            v = list(struct.unpack_from('<fff', data, offset + 12 + vi * 12))
+            vertices.append(v)
         offset += 50
     return vertices
 
-def write_stl(mesh_array, filepath):
-    """Schrijf numpy array (n, 3, 3) terug naar binary STL."""
-    parts = [b'\x00' * 80, struct.pack('<I', len(mesh_array))]
-    for tri in mesh_array:
+def write_stl(mesh, filepath):
+    """Schrijf numpy array (n, 3, 3) naar binary STL."""
+    parts = [b'\x00' * 80, struct.pack('<I', len(mesh))]
+    for tri in mesh:
         v1, v2, v3 = np.array(tri[0]), np.array(tri[1]), np.array(tri[2])
         normal = np.cross(v2 - v1, v3 - v1)
         length = np.linalg.norm(normal)
-        normal = normal / length if length > 1e-10 else np.array([0, 0, 1])
+        normal = normal / length if length > 1e-10 else np.array([0.0, 0.0, 1.0])
         parts.append(struct.pack('<fff', *normal))
         parts.append(struct.pack('<fff', *v1))
         parts.append(struct.pack('<fff', *v2))
@@ -64,23 +60,24 @@ def orient():
         file.save(tmp_in.name)
         tmp_in.close()
 
-        # Lees als platte lijst van vertices
-        vertices = read_stl(tmp_in.name)
+        # Lees als platte lijst: [[x,y,z], [x,y,z], ...]
+        content = read_stl(tmp_in.name)
+        num_triangles = len(content) // 3
 
-        # Tweaker-3: geef platte lijst mee, hij doet intern reshape(n/3, 3, 3)
+        # Tweaker-3: geef platte lijst mee
         tweaker = Tweaker.Tweak(
-            vertices,
+            content,
             extended_mode=True,
             verbose=False,
             show_progress=False
         )
 
-        matrix = np.array(tweaker.matrix)
+        # Haal rotatiematrix op (.Matrix met hoofdletter M)
+        rotation_matrix = np.array(tweaker.Matrix)
 
-        # Pas rotatie toe op alle vertices
-        num_triangles = len(vertices) // 3
-        mesh = np.array(vertices, dtype=np.float64).reshape(num_triangles, 3, 3)
-        rotated = np.matmul(mesh, matrix.T)
+        # Pas rotatie toe: mesh @ rotation_matrix (zoals Tweaker-3 zelf doet)
+        mesh = np.array(content, dtype=np.float64).reshape(num_triangles, 3, 3)
+        rotated = np.matmul(mesh, rotation_matrix)
 
         # Zet laagste punt op z=0
         min_z = rotated[:, :, 2].min()
