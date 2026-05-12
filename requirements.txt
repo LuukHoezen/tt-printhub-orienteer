@@ -2,4 +2,5 @@ flask
 flask-cors
 numpy
 scipy
+requests
 git+https://github.com/ChristophSchranz/Tweaker-3.git
