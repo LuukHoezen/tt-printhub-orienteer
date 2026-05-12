@@ -47,7 +47,7 @@ def orient_stl(vertices):
     num_triangles = len(vertices) // 3
     tweaker = Tweaker.Tweak(
         vertices,
-        extended_mode=True,
+        extended_mode=False,
         verbose=False,
         show_progress=False
     )
