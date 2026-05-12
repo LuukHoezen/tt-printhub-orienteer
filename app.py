@@ -8,7 +8,6 @@ from tweaker3 import Tweaker
 app = Flask(__name__)
 
 def read_stl(filepath):
-    """Lees binary STL, geef platte lijst van vertices terug."""
     with open(filepath, 'rb') as f:
         data = f.read()
     if len(data) < 84:
@@ -27,7 +26,6 @@ def read_stl(filepath):
     return vertices
 
 def write_stl(mesh, filepath):
-    """Schrijf numpy array (n, 3, 3) naar binary STL."""
     parts = [b'\x00' * 80, struct.pack('<I', len(mesh))]
     for tri in mesh:
         v1, v2, v3 = np.array(tri[0]), np.array(tri[1]), np.array(tri[2])
@@ -42,68 +40,119 @@ def write_stl(mesh, filepath):
     with open(filepath, 'wb') as f:
         f.write(b''.join(parts))
 
-@app.route('/orient', methods=['POST'])
-def orient():
+def orient_stl(vertices):
+    num_triangles = len(vertices) // 3
+    tweaker = Tweaker.Tweak(
+        vertices,
+        extended_mode=True,
+        verbose=False,
+        show_progress=False
+    )
+    axis = np.array(tweaker.rotation_axis)
+    angle = tweaker.rotation_angle
+    axis = axis / np.linalg.norm(axis) if np.linalg.norm(axis) > 1e-10 else np.array([0, 0, 1])
+    c, s = np.cos(angle), np.sin(angle)
+    x, y, z = axis
+    rotation_matrix = np.array([
+        [c + x*x*(1-c),   x*y*(1-c) - z*s, x*z*(1-c) + y*s],
+        [y*x*(1-c) + z*s, c + y*y*(1-c),   y*z*(1-c) - x*s],
+        [z*x*(1-c) - y*s, z*y*(1-c) + x*s, c + z*z*(1-c)  ],
+    ])
+    mesh = np.array(vertices, dtype=np.float64).reshape(num_triangles, 3, 3)
+    rotated = np.matmul(mesh, rotation_matrix.T)
+    min_z = rotated[:, :, 2].min()
+    rotated[:, :, 2] -= min_z
+    return rotated
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    API_KEY  = os.environ.get('PRINTAGO_API_KEY')
+    STORE_ID = os.environ.get('PRINTAGO_STORE_ID')
+
+    if not API_KEY or not STORE_ID:
+        return jsonify({'error': 'Server niet geconfigureerd'}), 500
+
     if 'file' not in request.files:
         return jsonify({'error': 'Geen bestand ontvangen'}), 400
 
     file = request.files['file']
-    filename = file.filename or 'model.stl'
-
-    if not filename.lower().endswith('.stl'):
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
-        file.save(tmp.name)
-        return send_file(tmp.name, as_attachment=True, download_name=filename)
+    filename = request.form.get('filename', file.filename or 'upload.stl')
+    name = request.form.get('name', filename.replace('.stl', ''))
 
     try:
         tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
         file.save(tmp_in.name)
         tmp_in.close()
 
-        # Lees als platte lijst: [[x,y,z], [x,y,z], ...]
-        content = read_stl(tmp_in.name)
-        num_triangles = len(content) // 3
+        ext = filename.split('.')[-1].lower()
 
-        # Tweaker-3: geef platte lijst mee
-        tweaker = Tweaker.Tweak(
-            content,
-            extended_mode=True,
-            verbose=False,
-            show_progress=False
+        # Oriënteer STL bestanden
+        if ext == 'stl':
+            vertices = read_stl(tmp_in.name)
+            rotated = orient_stl(vertices)
+            triangles = rotated.tolist()
+            tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
+            tmp_out.close()
+            write_stl(triangles, tmp_out.name)
+            upload_path = tmp_out.name
+        else:
+            upload_path = tmp_in.name
+
+        import urllib.request
+        import json
+
+        headers = {
+            'authorization': f'ApiKey {API_KEY}',
+            'x-printago-storeid': STORE_ID,
+            'content-type': 'application/json',
+        }
+
+        # Stap 1: Signed upload URL ophalen
+        signed_req = urllib.request.Request(
+            'https://api.printago.io/v1/storage/signed-upload-urls',
+            data=json.dumps({'filenames': [filename]}).encode(),
+            headers=headers,
+            method='POST'
         )
+        with urllib.request.urlopen(signed_req) as resp:
+            signed_data = json.loads(resp.read())
 
-        # Tweaker-3 geeft rotation_axis en rotation_angle terug
-        axis = np.array(tweaker.rotation_axis)
-        angle = tweaker.rotation_angle
+        path = signed_data['signedUrls'][0]['path']
+        upload_url = signed_data['signedUrls'][0]['uploadUrl']
 
-        # Bouw rotatiematrix via Rodrigues formule
-        axis = axis / np.linalg.norm(axis) if np.linalg.norm(axis) > 1e-10 else np.array([0, 0, 1])
-        c, s = np.cos(angle), np.sin(angle)
-        x, y, z = axis
-        rotation_matrix = np.array([
-            [c + x*x*(1-c),   x*y*(1-c) - z*s, x*z*(1-c) + y*s],
-            [y*x*(1-c) + z*s, c + y*y*(1-c),   y*z*(1-c) - x*s],
-            [z*x*(1-c) - y*s, z*y*(1-c) + x*s, c + z*z*(1-c)  ],
-        ])
+        # Stap 2: Bestand uploaden naar signed URL
+        with open(upload_path, 'rb') as f:
+            file_data = f.read()
 
-        # Pas rotatie toe: mesh @ rotation_matrix (zoals Tweaker-3 zelf doet)
-        mesh = np.array(content, dtype=np.float64).reshape(num_triangles, 3, 3)
-        rotated = np.matmul(mesh, rotation_matrix)
-
-        # Zet laagste punt op z=0
-        min_z = rotated[:, :, 2].min()
-        rotated[:, :, 2] -= min_z
-
-        tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
-        tmp_out.close()
-        write_stl(rotated, tmp_out.name)
-
-        return send_file(
-            tmp_out.name,
-            as_attachment=True,
-            download_name=filename,
-            mimetype='application/octet-stream'
+        put_req = urllib.request.Request(
+            upload_url,
+            data=file_data,
+            method='PUT'
         )
+        with urllib.request.urlopen(put_req) as resp:
+            pass
+
+        # Stap 3: Part aanmaken in Printago
+        part_body = json.dumps({
+            'name': name,
+            'type': 'step' if ext in ['step', 'stp'] else '3mf' if ext == '3mf' else 'stl',
+            'description': '',
+            'fileUris': [path],
+            'parameters': [],
+            'printTags': {},
+            'overriddenProcessProfileId': None,
+        }).encode()
+
+        part_req = urllib.request.Request(
+            'https://api.printago.io/v1/parts',
+            data=part_body,
+            headers=headers,
+            method='POST'
+        )
+        with urllib.request.urlopen(part_req) as resp:
+            part_data = json.loads(resp.read())
+
+        return jsonify(part_data), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
