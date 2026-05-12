@@ -62,7 +62,7 @@ def orient_stl(vertices):
         [z*x*(1-c) - y*s, z*y*(1-c) + x*s, c + z*z*(1-c)  ],
     ])
     mesh = np.array(vertices, dtype=np.float64).reshape(num_triangles, 3, 3)
-    rotated = np.matmul(mesh, rotation_matrix.T)
+    rotated = np.matmul(mesh, rotation_matrix)
     min_z = rotated[:, :, 2].min()
     rotated[:, :, 2] -= min_z
     return rotated
