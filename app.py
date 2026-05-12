@@ -81,14 +81,15 @@ def orient_stl(triangles):
 
 def write_stl(triangles):
     header = b'\x00' * 80
-    data = header + struct.pack('<I', len(triangles))
+    num = struct.pack('<I', len(triangles))
+    parts = [header, num]
     for normal, v1, v2, v3 in triangles:
-        data += struct.pack('<fff', *normal)
-        data += struct.pack('<fff', *v1)
-        data += struct.pack('<fff', *v2)
-        data += struct.pack('<fff', *v3)
-        data += struct.pack('<H', 0)
-    return data
+        parts.append(struct.pack('<fff', *normal))
+        parts.append(struct.pack('<fff', *v1))
+        parts.append(struct.pack('<fff', *v2))
+        parts.append(struct.pack('<fff', *v3))
+        parts.append(struct.pack('<H', 0))
+    return b''.join(parts)
 
 @app.route('/orient', methods=['POST'])
 def orient():
