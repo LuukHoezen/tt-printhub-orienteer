@@ -3,9 +3,11 @@ import tempfile
 import struct
 import numpy as np
 from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS
 from tweaker3 import Tweaker
 
 app = Flask(__name__)
+CORS(app)
 
 def read_stl(filepath):
     with open(filepath, 'rb') as f:
