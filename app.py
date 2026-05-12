@@ -75,7 +75,7 @@ def orient():
             show_progress=False
         )
 
-        matrix = np.array(tweaker.rotation_matrix)
+        matrix = np.array(tweaker.matrix)
 
         # Pas rotatie toe op alle vertices
         num_triangles = len(vertices) // 3
