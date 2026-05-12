@@ -99,10 +99,15 @@ def orient():
     debug_info.append(f"content-length: {request.content_length}")
 
     if 'file' not in request.files:
-        # Probeer raw body te lezen
         raw = request.get_data()
-        debug_info.append(f"geen file, raw body grootte: {len(raw)}, eerste bytes: {raw[:20].hex()}")
-        return jsonify({'error': 'Geen bestand', 'debug': debug_info}), 400
+        debug_info.append(f"geen file, raw body grootte: {len(raw)}, eerste bytes: {raw[:50].hex()}")
+        # Stuur debug info terug als 200 zodat Vercel hem logt
+        response = app.response_class(
+            response=str({'error': 'Geen bestand', 'debug': debug_info}),
+            status=200,
+            mimetype='text/plain'
+        )
+        return response
 
     file = request.files['file']
     filename = file.filename or 'model.stl'
