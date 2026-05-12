@@ -2,117 +2,81 @@ import os
 import sys
 import tempfile
 import struct
-import math
 from flask import Flask, request, send_file, jsonify
+from Tweaker3 import Tweaker
 
 app = Flask(__name__)
 
-def parse_stl(data):
+def read_stl(filepath):
+    """Lees STL bestand en geef mesh terug."""
+    with open(filepath, 'rb') as f:
+        data = f.read()
+    
     if len(data) < 84:
         raise ValueError(f"Bestand te klein: {len(data)} bytes")
+    
     num_triangles = struct.unpack_from('<I', data, 80)[0]
     expected_size = 84 + num_triangles * 50
+    
     if len(data) != expected_size:
         raise ValueError(f"Geen binary STL: verwacht {expected_size}, kreeg {len(data)}")
-    triangles = []
+    
+    mesh = []
     offset = 84
     for _ in range(num_triangles):
         normal = struct.unpack_from('<fff', data, offset)
         v1 = struct.unpack_from('<fff', data, offset + 12)
         v2 = struct.unpack_from('<fff', data, offset + 24)
         v3 = struct.unpack_from('<fff', data, offset + 36)
-        triangles.append((normal, v1, v2, v3))
+        mesh.append([list(v1), list(v2), list(v3)])
         offset += 50
-    return triangles
+    
+    return mesh
 
-def rotate_vertices(triangles, axis, angle):
-    c, s = math.cos(angle), math.sin(angle)
-    ax, ay, az = axis
-    def rotate_point(p):
-        x, y, z = p
-        dot = ax*x + ay*y + az*z
-        cx = x*c + (ay*z - az*y)*s + ax*dot*(1-c)
-        cy = y*c + (az*x - ax*z)*s + ay*dot*(1-c)
-        cz = z*c + (ax*y - ay*x)*s + az*dot*(1-c)
-        return (cx, cy, cz)
-    return [(rotate_point(n), rotate_point(v1), rotate_point(v2), rotate_point(v3))
-            for n, v1, v2, v3 in triangles]
+def apply_matrix(mesh, matrix):
+    """Pas rotatiermatrix toe op alle vertices."""
+    import numpy as np
+    result = []
+    for tri in mesh:
+        new_tri = []
+        for v in tri:
+            rotated = np.dot(matrix, v)
+            new_tri.append(rotated.tolist())
+        result.append(new_tri)
+    return result
 
-def translate_to_ground(triangles):
-    min_z = min(min(v1[2], v2[2], v3[2]) for _, v1, v2, v3 in triangles)
-    return [(n, (v1[0], v1[1], v1[2]-min_z), (v2[0], v2[1], v2[2]-min_z), (v3[0], v3[1], v3[2]-min_z))
-            for n, v1, v2, v3 in triangles]
-
-def score_orientation(triangles):
-    total_overhang = 0
-    base_contact = 0
-    max_z = 0
-    for normal, v1, v2, v3 in triangles:
-        ax, ay, az = v2[0]-v1[0], v2[1]-v1[1], v2[2]-v1[2]
-        bx, by, bz = v3[0]-v1[0], v3[1]-v1[1], v3[2]-v1[2]
-        cx = ay*bz - az*by
-        cy = az*bx - ax*bz
-        cz = ax*by - ay*bx
-        length = math.sqrt(cx*cx + cy*cy + cz*cz)
-        nz = cz / length if length > 1e-10 else 0
-        area = 0.5 * length
-        max_z = max(max_z, v1[2], v2[2], v3[2])
-        min_face_z = min(v1[2], v2[2], v3[2])
-        if nz < -0.5:
-            total_overhang += area * abs(nz)
-        if min_face_z < 0.1 and nz < -0.7:
-            base_contact += area
-    return total_overhang * 2.0 + max_z * 0.5 - base_contact * 3.0
-
-def orient_stl(triangles):
-    best_score = float('inf')
-    best_triangles = triangles
-    angles = [0, math.pi/2, math.pi, 3*math.pi/2]
-    axes = [(1,0,0), (0,1,0), (0,0,1)]
-    for axis in axes:
-        for angle in angles:
-            rotated = rotate_vertices(triangles, axis, angle)
-            grounded = translate_to_ground(rotated)
-            score = score_orientation(grounded)
-            if score < best_score:
-                best_score = score
-                best_triangles = grounded
-    return best_triangles
-
-def write_stl(triangles):
+def write_stl(mesh, filepath):
+    """Schrijf mesh terug naar binary STL."""
+    import numpy as np
     header = b'\x00' * 80
-    num = struct.pack('<I', len(triangles))
+    num = struct.pack('<I', len(mesh))
     parts = [header, num]
-    for normal, v1, v2, v3 in triangles:
+    
+    for tri in mesh:
+        v1, v2, v3 = np.array(tri[0]), np.array(tri[1]), np.array(tri[2])
+        normal = np.cross(v2 - v1, v3 - v1)
+        length = np.linalg.norm(normal)
+        if length > 1e-10:
+            normal = normal / length
+        else:
+            normal = np.array([0, 0, 1])
+        
         parts.append(struct.pack('<fff', *normal))
         parts.append(struct.pack('<fff', *v1))
         parts.append(struct.pack('<fff', *v2))
         parts.append(struct.pack('<fff', *v3))
         parts.append(struct.pack('<H', 0))
-    return b''.join(parts)
+    
+    with open(filepath, 'wb') as f:
+        f.write(b''.join(parts))
 
 @app.route('/orient', methods=['POST'])
 def orient():
-    # Debug: stuur info terug als header
-    debug_info = []
-    debug_info.append(f"content-type: {request.content_type}")
-    debug_info.append(f"files: {list(request.files.keys())}")
-    debug_info.append(f"content-length: {request.content_length}")
-
     if 'file' not in request.files:
-        raw = request.get_data()
-        debug_info.append(f"geen file, raw body grootte: {len(raw)}, eerste bytes: {raw[:50].hex()}")
-        # Stuur debug info terug als 200 zodat Vercel hem logt
-        response = app.response_class(
-            response=str({'error': 'Geen bestand', 'debug': debug_info}),
-            status=200,
-            mimetype='text/plain'
-        )
-        return response
+        return jsonify({'error': 'Geen bestand ontvangen'}), 400
 
     file = request.files['file']
     filename = file.filename or 'model.stl'
-    debug_info.append(f"filename: {filename}")
 
     if not filename.lower().endswith('.stl'):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
@@ -120,25 +84,35 @@ def orient():
         return send_file(tmp.name, as_attachment=True, download_name=filename)
 
     try:
-        data = file.read()
-        debug_info.append(f"bestandsgrootte: {len(data)}")
-        triangles = parse_stl(data)
-        debug_info.append(f"triangles: {len(triangles)}")
-        oriented = orient_stl(triangles)
-        result = write_stl(oriented)
-        debug_info.append(f"resultaat: {len(result)}")
+        # Sla het bestand op
+        tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
+        file.save(tmp_in.name)
+        tmp_in.close()
 
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
-        tmp.write(result)
-        tmp.flush()
+        # Lees mesh
+        mesh = read_stl(tmp_in.name)
 
-        response = send_file(tmp.name, as_attachment=True, download_name=filename, mimetype='application/octet-stream')
-        response.headers['X-Debug'] = ' | '.join(debug_info)
-        return response
+        # Tweaker-3 oriëntatie bepalen
+        tweaker = Tweaker.Tweak(mesh, extended_mode=True, verbose=False)
+        matrix = tweaker.rotation_matrix
+
+        # Pas matrix toe
+        oriented_mesh = apply_matrix(mesh, matrix)
+
+        # Schrijf georiënteerd STL
+        tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
+        tmp_out.close()
+        write_stl(oriented_mesh, tmp_out.name)
+
+        return send_file(
+            tmp_out.name,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/octet-stream'
+        )
 
     except Exception as e:
-        debug_info.append(f"fout: {str(e)}")
-        return jsonify({'error': str(e), 'debug': debug_info}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health():
