@@ -73,7 +73,9 @@ def orient():
         )
 
         # Haal rotatiematrix op (.Matrix met hoofdletter M)
-        rotation_matrix = np.array(tweaker.Matrix)
+        # Haal rotatiematrix op uit results array
+        # results formaat: [[orientation, bottom_area, overhang, contour, unprintability, [euler_vec, euler_angle, matrix]], ...]
+        rotation_matrix = np.array(tweaker.results[0][5][2])
 
         # Pas rotatie toe: mesh @ rotation_matrix (zoals Tweaker-3 zelf doet)
         mesh = np.array(content, dtype=np.float64).reshape(num_triangles, 3, 3)
