@@ -2,7 +2,8 @@ import os
 import tempfile
 import struct
 import numpy as np
-from flask import Flask, request, send_file, jsonify
+import requests
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from tweaker3 import Tweaker
 
@@ -79,14 +80,19 @@ def upload():
 
     file = request.files['file']
     filename = request.form.get('filename', file.filename or 'upload.stl')
-    name = request.form.get('name', filename.replace('.stl', ''))
+    name = request.form.get('name', filename.rsplit('.', 1)[0])
+    ext = filename.rsplit('.', 1)[-1].lower()
+
+    printago_headers = {
+        'authorization': f'ApiKey {API_KEY}',
+        'x-printago-storeid': STORE_ID,
+    }
 
     try:
-        tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
+        # Sla bestand op
+        tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}')
         file.save(tmp_in.name)
         tmp_in.close()
-
-        ext = filename.split('.')[-1].lower()
 
         # Oriënteer STL bestanden
         if ext == 'stl':
@@ -100,61 +106,43 @@ def upload():
         else:
             upload_path = tmp_in.name
 
-        import urllib.request
-        import json
-
-        headers = {
-            'authorization': f'ApiKey {API_KEY}',
-            'x-printago-storeid': STORE_ID,
-            'content-type': 'application/json',
-        }
-
         # Stap 1: Signed upload URL ophalen
-        signed_req = urllib.request.Request(
+        signed_res = requests.post(
             'https://api.printago.io/v1/storage/signed-upload-urls',
-            data=json.dumps({'filenames': [filename]}).encode(),
-            headers=headers,
-            method='POST'
+            headers={**printago_headers, 'content-type': 'application/json'},
+            json={'filenames': [filename]}
         )
-        with urllib.request.urlopen(signed_req) as resp:
-            signed_data = json.loads(resp.read())
+        if not signed_res.ok:
+            return jsonify({'error': f'Signed URL fout: {signed_res.text}'}), signed_res.status_code
 
+        signed_data = signed_res.json()
         path = signed_data['signedUrls'][0]['path']
         upload_url = signed_data['signedUrls'][0]['uploadUrl']
 
         # Stap 2: Bestand uploaden naar signed URL
         with open(upload_path, 'rb') as f:
-            file_data = f.read()
-
-        put_req = urllib.request.Request(
-            upload_url,
-            data=file_data,
-            method='PUT'
-        )
-        with urllib.request.urlopen(put_req) as resp:
-            pass
+            put_res = requests.put(upload_url, data=f)
+        if not put_res.ok:
+            return jsonify({'error': f'Upload fout: {put_res.status_code}'}), put_res.status_code
 
         # Stap 3: Part aanmaken in Printago
-        part_body = json.dumps({
-            'name': name,
-            'type': 'step' if ext in ['step', 'stp'] else '3mf' if ext == '3mf' else 'stl',
-            'description': '',
-            'fileUris': [path],
-            'parameters': [],
-            'printTags': {},
-            'overriddenProcessProfileId': None,
-        }).encode()
-
-        part_req = urllib.request.Request(
+        part_res = requests.post(
             'https://api.printago.io/v1/parts',
-            data=part_body,
-            headers=headers,
-            method='POST'
+            headers={**printago_headers, 'content-type': 'application/json'},
+            json={
+                'name': name,
+                'type': 'step' if ext in ['step', 'stp'] else '3mf' if ext == '3mf' else 'stl',
+                'description': '',
+                'fileUris': [path],
+                'parameters': [],
+                'printTags': {},
+                'overriddenProcessProfileId': None,
+            }
         )
-        with urllib.request.urlopen(part_req) as resp:
-            part_data = json.loads(resp.read())
+        if not part_res.ok:
+            return jsonify({'error': f'Part fout: {part_res.text}'}), part_res.status_code
 
-        return jsonify(part_data), 200
+        return jsonify(part_res.json()), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
