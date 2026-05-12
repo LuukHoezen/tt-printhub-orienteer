@@ -7,7 +7,8 @@ from tweaker3 import Tweaker
 
 app = Flask(__name__)
 
-def read_stl_to_mesh(filepath):
+def read_stl(filepath):
+    """Lees binary STL en geef vertices terug als platte lijst."""
     with open(filepath, 'rb') as f:
         data = f.read()
     if len(data) < 84:
@@ -16,22 +17,24 @@ def read_stl_to_mesh(filepath):
     expected_size = 84 + num_triangles * 50
     if len(data) != expected_size:
         raise ValueError(f"Geen binary STL: verwacht {expected_size}, kreeg {len(data)}")
-    mesh = []
+    # Platte lijst van vertices: [v1, v2, v3, v1, v2, v3, ...]
+    vertices = []
     offset = 84
     for _ in range(num_triangles):
-        v1 = struct.unpack_from('<fff', data, offset + 12)
-        v2 = struct.unpack_from('<fff', data, offset + 24)
-        v3 = struct.unpack_from('<fff', data, offset + 36)
-        mesh.append([list(v1), list(v2), list(v3)])
+        v1 = list(struct.unpack_from('<fff', data, offset + 12))
+        v2 = list(struct.unpack_from('<fff', data, offset + 24))
+        v3 = list(struct.unpack_from('<fff', data, offset + 36))
+        vertices.append(v1)
+        vertices.append(v2)
+        vertices.append(v3)
         offset += 50
-    return mesh
+    return vertices
 
-def write_stl(mesh, filepath):
-    parts = [b'\x00' * 80, struct.pack('<I', len(mesh))]
-    for tri in mesh:
-        v1 = np.array(tri[0])
-        v2 = np.array(tri[1])
-        v3 = np.array(tri[2])
+def write_stl(mesh_array, filepath):
+    """Schrijf numpy array (n, 3, 3) terug naar binary STL."""
+    parts = [b'\x00' * 80, struct.pack('<I', len(mesh_array))]
+    for tri in mesh_array:
+        v1, v2, v3 = np.array(tri[0]), np.array(tri[1]), np.array(tri[2])
         normal = np.cross(v2 - v1, v3 - v1)
         length = np.linalg.norm(normal)
         normal = normal / length if length > 1e-10 else np.array([0, 0, 1])
@@ -42,13 +45,6 @@ def write_stl(mesh, filepath):
         parts.append(struct.pack('<H', 0))
     with open(filepath, 'wb') as f:
         f.write(b''.join(parts))
-
-def apply_rotation(mesh, matrix):
-    result = []
-    for tri in mesh:
-        new_tri = [np.dot(matrix, np.array(v)).tolist() for v in tri]
-        result.append(new_tri)
-    return result
 
 @app.route('/orient', methods=['POST'])
 def orient():
@@ -68,26 +64,31 @@ def orient():
         file.save(tmp_in.name)
         tmp_in.close()
 
-        mesh = read_stl_to_mesh(tmp_in.name)
+        # Lees als platte lijst van vertices
+        vertices = read_stl(tmp_in.name)
 
-        # Tweaker-3 verwacht mesh als lijst van triangles met 3 vertices elk
+        # Tweaker-3: geef platte lijst mee, hij doet intern reshape(n/3, 3, 3)
         tweaker = Tweaker.Tweak(
-            mesh,
+            vertices,
             extended_mode=True,
             verbose=False,
             show_progress=False
         )
 
-        matrix = tweaker.rotation_matrix
-        oriented_mesh = apply_rotation(mesh, matrix)
+        matrix = np.array(tweaker.rotation_matrix)
+
+        # Pas rotatie toe op alle vertices
+        num_triangles = len(vertices) // 3
+        mesh = np.array(vertices, dtype=np.float64).reshape(num_triangles, 3, 3)
+        rotated = np.matmul(mesh, matrix.T)
 
         # Zet laagste punt op z=0
-        min_z = min(min(v[2] for v in tri) for tri in oriented_mesh)
-        oriented_mesh = [[[v[0], v[1], v[2] - min_z] for v in tri] for tri in oriented_mesh]
+        min_z = rotated[:, :, 2].min()
+        rotated[:, :, 2] -= min_z
 
         tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix='.stl')
         tmp_out.close()
-        write_stl(oriented_mesh, tmp_out.name)
+        write_stl(rotated, tmp_out.name)
 
         return send_file(
             tmp_out.name,
