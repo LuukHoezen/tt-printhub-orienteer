@@ -3,7 +3,7 @@ import sys
 import tempfile
 import struct
 from flask import Flask, request, send_file, jsonify
-from Tweaker3 import Tweaker
+from tweaker3 import Tweaker
 
 app = Flask(__name__)
 
