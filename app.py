@@ -67,6 +67,48 @@ def orient_stl(vertices):
     rotated[:, :, 2] -= min_z
     return rotated
 
+def get_or_create_folder(klas, api_key, store_id):
+    """Zoek map met klasnaam, maak aan als hij niet bestaat."""
+    headers = {
+        'authorization': f'ApiKey {api_key}',
+        'x-printago-storeid': store_id,
+        'content-type': 'application/json',
+    }
+
+    # Zoek bestaande map
+    search_res = requests.post(
+        'https://api.printago.io/v1/folders/search',
+        headers=headers,
+        json={
+            'filters': [
+                {'field': 'name', 'operator': 'eq', 'value': klas},
+                {'field': 'type', 'operator': 'eq', 'value': 'part'},
+            ]
+        }
+    )
+
+    if search_res.ok:
+        results = search_res.json()
+        items = results.get('items', results.get('data', []))
+        if items:
+            return items[0]['id']
+
+    # Map bestaat niet, aanmaken
+    create_res = requests.post(
+        'https://api.printago.io/v1/folders',
+        headers=headers,
+        json={
+            'name': klas,
+            'type': 'part',
+            'parentId': None,
+        }
+    )
+
+    if create_res.ok:
+        return create_res.json()['id']
+
+    return None
+
 @app.route('/upload', methods=['POST'])
 def upload():
     API_KEY  = os.environ.get('PRINTAGO_API_KEY')
@@ -81,6 +123,7 @@ def upload():
     file = request.files['file']
     filename = request.form.get('filename', file.filename or 'upload.stl')
     name = request.form.get('name', filename.rsplit('.', 1)[0])
+    klas = request.form.get('klas', '')
     ext = filename.rsplit('.', 1)[-1].lower()
 
     printago_headers = {
@@ -106,6 +149,11 @@ def upload():
         else:
             upload_path = tmp_in.name
 
+        # Zoek of maak klasmap aan
+        folder_id = None
+        if klas:
+            folder_id = get_or_create_folder(klas, API_KEY, STORE_ID)
+
         # Stap 1: Signed upload URL ophalen
         signed_res = requests.post(
             'https://api.printago.io/v1/storage/signed-upload-urls',
@@ -126,18 +174,21 @@ def upload():
             return jsonify({'error': f'Upload fout: {put_res.status_code}'}), put_res.status_code
 
         # Stap 3: Part aanmaken in Printago
+        part_body = {
+            'name': name,
+            'type': 'step' if ext in ['step', 'stp'] else '3mf' if ext == '3mf' else 'stl',
+            'description': '',
+            'fileUris': [path],
+            'parameters': [],
+            'printTags': {},
+            'overriddenProcessProfileId': None,
+            'folderId': folder_id,
+        }
+
         part_res = requests.post(
             'https://api.printago.io/v1/parts',
             headers={**printago_headers, 'content-type': 'application/json'},
-            json={
-                'name': name,
-                'type': 'step' if ext in ['step', 'stp'] else '3mf' if ext == '3mf' else 'stl',
-                'description': '',
-                'fileUris': [path],
-                'parameters': [],
-                'printTags': {},
-                'overriddenProcessProfileId': None,
-            }
+            json=part_body
         )
         if not part_res.ok:
             return jsonify({'error': f'Part fout: {part_res.text}'}), part_res.status_code
