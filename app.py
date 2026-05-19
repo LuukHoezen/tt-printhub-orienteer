@@ -76,23 +76,28 @@ def get_folder_id(klas, api_key, store_id):
     }
 
     def zoek_map(naam):
-        # Gebruik GET /v1/folders/parts met alle mappen ophalen
         res = requests.get(
             'https://api.printago.io/v1/folders/parts',
             headers=headers,
         )
-        if res.ok:
-            data = res.json()
-            items = data.get('items', data.get('data', []))
-            if isinstance(items, list):
-                for item in items:
-                    if item.get('name', '').strip() == naam:
-                        return item['id']
-            # Soms is de response direct een lijst
-            if isinstance(data, list):
-                for item in data:
-                    if item.get('name', '').strip() == naam:
-                        return item['id']
+        if not res.ok:
+            return None
+
+        data = res.json()
+
+        # API geeft direct een lijst terug
+        if isinstance(data, list):
+            for item in data:
+                if item.get('name', '').strip() == naam:
+                    return item['id']
+            return None
+
+        # Of een object met items/data
+        items = data.get('items', data.get('data', []))
+        for item in items:
+            if item.get('name', '').strip() == naam:
+                return item['id']
+
         return None
 
     folder_id = zoek_map(klas)
