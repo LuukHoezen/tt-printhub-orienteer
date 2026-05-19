@@ -104,7 +104,7 @@ def get_folder_id(klas, api_key, store_id):
     if folder_id:
         return folder_id
 
-    return zoek_map('KLAS')
+    return zoek_map('KLAS ONBEKEND')
 
 @app.route('/upload', methods=['POST'])
 def upload():
