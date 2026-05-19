@@ -68,7 +68,7 @@ def orient_stl(vertices):
     return rotated
 
 def get_folder_id(klas, api_key, store_id):
-    """Zoek map met klasnaam. Als niet gevonden, gebruik de map 'KLAS'."""
+    """Zoek map met klasnaam via GET. Fallback naar map 'KLAS'."""
     headers = {
         'authorization': f'ApiKey {api_key}',
         'x-printago-storeid': store_id,
@@ -76,21 +76,23 @@ def get_folder_id(klas, api_key, store_id):
     }
 
     def zoek_map(naam):
-        res = requests.post(
-            'https://api.printago.io/v1/folders/search',
+        # Gebruik GET /v1/folders/parts met alle mappen ophalen
+        res = requests.get(
+            'https://api.printago.io/v1/folders/parts',
             headers=headers,
-            json={
-                'filters': [
-                    {'field': 'name', 'operator': 'eq', 'value': naam},
-                    {'field': 'type', 'operator': 'eq', 'value': 'part'},
-                ]
-            }
         )
         if res.ok:
             data = res.json()
             items = data.get('items', data.get('data', []))
-            if items:
-                return items[0]['id']
+            if isinstance(items, list):
+                for item in items:
+                    if item.get('name', '').strip() == naam:
+                        return item['id']
+            # Soms is de response direct een lijst
+            if isinstance(data, list):
+                for item in data:
+                    if item.get('name', '').strip() == naam:
+                        return item['id']
         return None
 
     folder_id = zoek_map(klas)
