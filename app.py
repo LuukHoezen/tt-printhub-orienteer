@@ -67,47 +67,37 @@ def orient_stl(vertices):
     rotated[:, :, 2] -= min_z
     return rotated
 
-def get_or_create_folder(klas, api_key, store_id):
-    """Zoek map met klasnaam, maak aan als hij niet bestaat."""
+def get_folder_id(klas, api_key, store_id):
+    """Zoek map met klasnaam. Als niet gevonden, gebruik de map 'KLAS'."""
     headers = {
         'authorization': f'ApiKey {api_key}',
         'x-printago-storeid': store_id,
         'content-type': 'application/json',
     }
 
-    # Zoek bestaande map
-    search_res = requests.post(
-        'https://api.printago.io/v1/folders/search',
-        headers=headers,
-        json={
-            'filters': [
-                {'field': 'name', 'operator': 'eq', 'value': klas},
-                {'field': 'type', 'operator': 'eq', 'value': 'part'},
-            ]
-        }
-    )
+    def zoek_map(naam):
+        res = requests.post(
+            'https://api.printago.io/v1/folders/search',
+            headers=headers,
+            json={
+                'filters': [
+                    {'field': 'name', 'operator': 'eq', 'value': naam},
+                    {'field': 'type', 'operator': 'eq', 'value': 'part'},
+                ]
+            }
+        )
+        if res.ok:
+            data = res.json()
+            items = data.get('items', data.get('data', []))
+            if items:
+                return items[0]['id']
+        return None
 
-    if search_res.ok:
-        results = search_res.json()
-        items = results.get('items', results.get('data', []))
-        if items:
-            return items[0]['id']
+    folder_id = zoek_map(klas)
+    if folder_id:
+        return folder_id
 
-    # Map bestaat niet, aanmaken
-    create_res = requests.post(
-        'https://api.printago.io/v1/folders',
-        headers=headers,
-        json={
-            'name': klas,
-            'type': 'part',
-            'parentId': None,
-        }
-    )
-
-    if create_res.ok:
-        return create_res.json()['id']
-
-    return None
+    return zoek_map('KLAS')
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -132,12 +122,10 @@ def upload():
     }
 
     try:
-        # Sla bestand op
         tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}')
         file.save(tmp_in.name)
         tmp_in.close()
 
-        # Oriënteer STL bestanden
         if ext == 'stl':
             vertices = read_stl(tmp_in.name)
             rotated = orient_stl(vertices)
@@ -149,12 +137,8 @@ def upload():
         else:
             upload_path = tmp_in.name
 
-        # Zoek of maak klasmap aan
-        folder_id = None
-        if klas:
-            folder_id = get_or_create_folder(klas, API_KEY, STORE_ID)
+        folder_id = get_folder_id(klas, API_KEY, STORE_ID) if klas else None
 
-        # Stap 1: Signed upload URL ophalen
         signed_res = requests.post(
             'https://api.printago.io/v1/storage/signed-upload-urls',
             headers={**printago_headers, 'content-type': 'application/json'},
@@ -167,13 +151,11 @@ def upload():
         path = signed_data['signedUrls'][0]['path']
         upload_url = signed_data['signedUrls'][0]['uploadUrl']
 
-        # Stap 2: Bestand uploaden naar signed URL
         with open(upload_path, 'rb') as f:
             put_res = requests.put(upload_url, data=f)
         if not put_res.ok:
             return jsonify({'error': f'Upload fout: {put_res.status_code}'}), put_res.status_code
 
-        # Stap 3: Part aanmaken in Printago
         part_body = {
             'name': name,
             'type': 'step' if ext in ['step', 'stp'] else '3mf' if ext == '3mf' else 'stl',
